@@ -1,0 +1,15 @@
+# ==============================================================================
+# SÉCURITÉ : SECRETS ET ACCÈS (À LA RACINE)
+# ==============================================================================
+.env
+
+# ==============================================================================
+# PROPRETÉ ET INFRASTRUCTURE : LOGS ET CACHES (PARTOUT DANS LE PROJET)
+# ==============================================================================
+# Ignore tous les dossiers logs, peu importe où ils se trouvent
+logs/
+*.log
+
+# Ignore tous les dossiers de cache Python n'importe où dans le projet
+__pycache__/
+*.pyc
