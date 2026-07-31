@@ -41,14 +41,15 @@ def nettoyer_schema_gold_sur_echec(conn):
 def run_gold(conn=None):
     """
     Fonction principale de la couche Gold (Modélisation en étoiles / Datamart).
-    Consomme les tables de la couche Silver, applique la modélisation et alimente Gold.
+    Consomme les tables de la couche Silver, applique la modélisation exacte 
+    définie dans les scripts SQL et alimente Gold.
     
     :param conn: Connexion psycopg2 active transmise par le script principal. 
                  Si aucune connexion n'est fournie (exécution autonome), 
                  le script tourne en mode lecture/simulation SANS commit final.
     """
     print("\n" + "="*80)
-    print("🚀  PIPELINE DE MODELISATION GOLD - POLARS & SQL  🚀")
+    print("🚀  PIPELINE DE MODELISATION GOLD - POLARS & SQL (EXACT MATCH)  🚀")
     print("="*80 + "\n")
 
     uri_psycopg2 = construire_uri_psycopg2(data_warehouse)
@@ -83,7 +84,6 @@ def run_gold(conn=None):
         requete = f'SELECT * FROM silver."{nom_table}";'
         for tentative in range(1, max_retries + 1):
             try:
-                # Utilisation de conn (psycopg2) au lieu de l'URI pour lire les données non commitées
                 return pl.read_database(query=requete, connection=conn)
             except Exception as e:
                 print(f"⚠️ [Tentative {tentative}/{max_retries}] Erreur de lecture sur silver.{nom_table} : {e}")
@@ -95,7 +95,6 @@ def run_gold(conn=None):
     def ecrire_table_gold(df: pl.DataFrame, nom_table_destination: str):
         """
         Écrit un DataFrame Polars dans le schéma Gold via copy_expert sans effectuer de commit.
-        Le commit est délégué à l'orchestrateur principal.
         """
         table_complete = f'gold."{nom_table_destination}"'
         try:
@@ -105,7 +104,6 @@ def run_gold(conn=None):
                 for col_name, col_type in df.schema.items():
                     col_propre = col_name.replace(' ', '_').replace('"', '')
                     
-                    # Mapping simplifié Polars -> Postgres
                     if col_type.is_integer():
                         pg_type = 'BIGINT'
                     elif col_type.is_float():
@@ -123,7 +121,7 @@ def run_gold(conn=None):
 
                 create_sql = f'CREATE TABLE IF NOT EXISTS {table_complete} ({", ".join(colonnes_sql)});'
                 curseur.execute(create_sql)
-                curseur.execute(f'TRUNCATE TABLE {table_complete};')
+                curseur.execute(f'TRUNCATE TABLE {table_complete} CASCADE;')
 
                 # 2. Ingestion massive par flux CSV en mémoire
                 if not df.is_empty():
@@ -134,102 +132,156 @@ def run_gold(conn=None):
                         f"COPY {table_complete} FROM STDIN WITH CSV NULL AS ''",
                         output
                     )
+                    output.close()
             print(f"    ✅ [GOLD] Ingestion réussie : {table_complete} ({len(df):,} lignes).")
         except Exception as e:
             print(f"💥 Erreur lors de l'écriture dans {table_complete} : {e}")
             raise RuntimeError(f"Échec d'écriture dans {table_complete}") from e
 
     # ==============================================================================
-    # 3. TRANSFORMATION & MODÉLISATION EN ÉTOILE (DATAMART)
+    # 3. TRANSFORMATION & MODÉLISATION GOLD (EXACTE CONFORMITÉ SQL)
     # ==============================================================================
     print("🚀 Démarrage de la construction du Datamart Gold...\n")
 
     try:
-        # Chargement des tables Silver nécessaires via la connexion active
+        # Chargement des tables Silver nécessaires
         df_orders = lire_table_silver("sourceb_source_olist_orders_dataset")
         df_order_items = lire_table_silver("sourcea_source_olist_order_items_dataset")
         df_payments = lire_table_silver("sourcea_source_olist_order_payments_dataset")
         df_reviews = lire_table_silver("sourceb_source_olist_order_reviews_dataset")
         df_customers = lire_table_silver("sourcea_source_olist_customers_dataset")
-        df_products = lire_table_silver("sourceb_source_olist_products_dataset")
+        df_geolocation = lire_table_silver("sourcea_source_olist_geolocation_dataset")
         df_sellers = lire_table_silver("sourceb_source_olist_sellers_dataset")
+        df_products = lire_table_silver("sourceb_source_olist_products_dataset")
+        df_translation = lire_table_silver("sourceb_source_product_category_name_translation")
 
-        # --- A. DIMENSION CLIENTS ---
+        # --- A. DIMENSION CUSTOMERS ---
         dim_customers = df_customers.select([
-            pl.col("customer_id"),
-            pl.col("customer_city").alias("ville"),
-            pl.col("customer_state").alias("etat"),
-            pl.col("customer_zip_code_prefix").alias("code_postal"),
-            pl.lit(datetime.now()).cast(pl.Datetime("us")).alias("date_gold_added")
+            "customer_id",
+            "customer_zip_code_prefix",
+            "customer_city",
+            "customer_state"
         ])
-        ecrire_table_gold(dim_customers, "dim_clients")
+        ecrire_table_gold(dim_customers, "dim_customers")
 
-        # --- B. DIMENSION PRODUITS ---
-        dim_products = df_products.select([
-            pl.col("product_id"),
-            pl.col("product_category_name").alias("categorie"),
-            pl.col("product_weight_g").alias("poids_g"),
-            pl.col("product_length_cm").alias("longueur_cm"),
-            pl.col("product_height_cm").alias("hauteur_cm"),
-            pl.col("product_width_cm").alias("largeur_cm"),
-            pl.lit(datetime.now()).cast(pl.Datetime("us")).alias("date_gold_added")
+        # --- B. DIMENSION GEOLOCATION ---
+        dim_geolocation = df_geolocation.select([
+            "geolocation_zip_code_prefix",
+            "geolocation_city",
+            "geolocation_state"
         ])
-        ecrire_table_gold(dim_products, "dim_produits")
+        ecrire_table_gold(dim_geolocation, "dim_geolocation")
 
-        # --- C. DIMENSION VENDEURS ---
+        # --- C. DIMENSION SELLERS ---
         dim_sellers = df_sellers.select([
-            pl.col("seller_id"),
-            pl.col("seller_city").alias("ville"),
-            pl.col("seller_state").alias("etat"),
-            pl.col("seller_zip_code_prefix").alias("code_postal"),
-            pl.lit(datetime.now()).cast(pl.Datetime("us")).alias("date_gold_added")
+            "seller_id",
+            "seller_zip_code_prefix",
+            "seller_city",
+            "seller_state"
         ])
-        ecrire_table_gold(dim_sellers, "dim_vendeurs")
+        ecrire_table_gold(dim_sellers, "dim_sellers")
 
-        # --- D. TABLE DE FAITS : VENTES ---
-        # Agrégation des paiements par commande
-        df_payments_agg = df_payments.group_by("order_id").agg([
-            pl.col("payment_value").sum().alias("total_paiement"),
-            pl.col("payment_type").first().alias("mode_paiement_principal")
+        # --- D. DIMENSION PRODUCTS ---
+        dim_products = (
+            df_products.join(df_translation, on="product_category_name", how="left")
+            .select([
+                "product_id",
+                pl.col("product_category_name")
+                  .fill_null("Uncategorized")
+                  .alias("product_category_name_original"),
+                pl.coalesce([
+                    pl.col("product_category_name_english"),
+                    pl.col("product_category_name"),
+                    pl.lit("Uncategorized")
+                ]).alias("product_category_name_english_translated")
+            ])
+        )
+        ecrire_table_gold(dim_products, "dim_products")
+
+        # --- E. TABLE DE FAITS : fact_orders ---
+        # Nettoyage préalable des métadonnées d'audit Silver pour éviter le conflit "date_silver_added_right"
+        df_orders_clean = df_orders.drop("date_silver_added", strict=False)
+        df_order_items_clean = df_order_items.drop("date_silver_added", strict=False)
+        df_payments_clean = df_payments.drop("date_silver_added", strict=False)
+        df_reviews_clean = df_reviews.drop("date_silver_added", strict=False)
+
+        # Étape 0 : Jointures
+        etape0_jointure = (
+            df_orders_clean.join(df_order_items_clean, on="order_id", how="left")
+                           .join(df_payments_clean, on="order_id", how="left")
+                           .join(df_reviews_clean, on="order_id", how="left")
+        )
+
+        canceled_statuses = ["unavailable", "canceled", "invoiced", "created"]
+        is_canceled_no_product = pl.col("product_id").is_null() & pl.col("order_status").is_in(canceled_statuses)
+
+        # Étape 1 : Correction des paiements pour les produits manquants
+        etape1_correction = etape0_jointure.with_columns([
+            pl.col("product_id").fill_null("n/a"),
+            pl.col("seller_id").fill_null("n/a"),
+            pl.when(is_canceled_no_product).then(pl.lit("canceled_no_product")).otherwise(pl.col("payment_type")).alias("payment_type"),
+            pl.when(is_canceled_no_product).then(0).otherwise(pl.col("payment_sequential")).alias("payment_sequential"),
+            pl.when(is_canceled_no_product).then(0).otherwise(pl.col("payment_installments")).alias("payment_installments"),
+            pl.when(is_canceled_no_product).then(0.0).otherwise(pl.col("payment_value")).alias("payment_value")
         ])
 
-        # Agrégation des avis par commande
-        df_reviews_agg = df_reviews.group_by("order_id").agg([
-            pl.col("review_score").mean().alias("note_moyenne_review")
+        # Étape 2 : Analyse des doublons d'order_id (Window Functions équivalentes)
+        etape2_analyse = etape1_correction.with_columns([
+            pl.len().over("order_id").alias("nb_occurrences"),
+            (pl.col("payment_value").min().over("order_id") == pl.col("payment_value").max().over("order_id")).alias("paiements_sont_identiques"),
+            pl.col("payment_value").sum().over("order_id").alias("somme_totale_paiements"),
+            pl.col("order_purchase_timestamp").rank(method="ordinal", descending=True).over("order_id").alias("rang_ligne")
         ])
 
-        # Jointure pour former le fait principal
-        fact_sales = df_order_items.join(
-            df_orders, on="order_id", how="inner"
-        ).join(
-            df_payments_agg, on="order_id", how="left"
-        ).join(
-            df_reviews_agg, on="order_id", how="left"
-        ).select([
-            pl.col("order_id"),
-            pl.col("order_item_id"),
-            pl.col("customer_id"),
-            pl.col("product_id"),
-            pl.col("seller_id"),
-            pl.col("order_status").alias("statut_commande"),
-            pl.col("order_purchase_timestamp").alias("date_achat"),
-            pl.col("shipping_limit_date").alias("date_limite_expedition"),
-            pl.col("price").alias("prix_unitaire"),
-            pl.col("freight_value").alias("frais_port"),
-            pl.col("total_paiement"),
-            pl.col("mode_paiement_principal"),
-            pl.col("note_moyenne_review"),
-            pl.lit(datetime.now()).cast(pl.Datetime("us")).alias("date_gold_added")
-        ])
-        ecrire_table_gold(fact_sales, "fait_ventes")
+        # Étape 3 : Application des règles métiers finales et déduplication (rang_ligne == 1)
+        fact_orders = (
+            etape2_analyse
+            .filter(pl.col("rang_ligne") == 1)
+            .select([
+                "order_id",
+                "customer_id",
+                "product_id",
+                "seller_id",
+                "order_status",
+                "payment_type",
+                "payment_sequential",
+                "payment_installments",
+                "review_score",
+                "order_approved_at",
+                "shipping_limit_date",
+                "order_purchase_timestamp",
+                "order_delivered_carrier_date",
+                "order_delivered_customer_date",
+                "order_estimated_delivery_date",
+                
+                # RÈGLE SUR PRICE
+                pl.when((pl.col("nb_occurrences") > 1) & (pl.col("paiements_sont_identiques") == True))
+                  .then(pl.col("price") * pl.col("nb_occurrences"))
+                  .otherwise(pl.col("price"))
+                  .alias("price"),
+                  
+                # RÈGLE SUR FREIGHT
+                pl.when((pl.col("nb_occurrences") > 1) & (pl.col("paiements_sont_identiques") == True))
+                  .then(pl.col("freight_value") * pl.col("nb_occurrences"))
+                  .otherwise(pl.col("freight_value"))
+                  .alias("freight_value"),
+                  
+                # RÈGLE SUR PAYMENT_VALUE
+                pl.when(pl.col("paiements_sont_identiques") == False)
+                  .then(pl.col("somme_totale_paiements"))
+                  .otherwise(pl.col("payment_value"))
+                  .alias("payment_value")
+            ])
+        )
+        ecrire_table_gold(fact_orders, "fact_orders")
 
-        print("\n🎉 TOUTES LES TABLES DU DATAMART GOLD ONT ÉTÉ GÉNÉRÉES ET ÉCRITES (EN ATTENTE DE COMMIT) !")
+        print("\n🎉 TOUTES LES TABLES DU DATAMART GOLD ONT ÉTÉ GÉNÉRÉES ET ÉCRITES STRICTEMENT SELON LA LOGIQUE SQL !")
 
     except Exception as global_err:
         print(f"\n💥 PIPELINE GOLD ARRÊTÉ : Erreur bloquante : {global_err}")
         traceback.print_exc()
         
-        # Annulation et purge
+        # Annulation et purge d'urgence
         nettoyer_schema_gold_sur_echec(conn)
         
         if not conn_externe:
@@ -239,9 +291,8 @@ def run_gold(conn=None):
         raise RuntimeError(f"Échec de la couche Gold : {global_err}") from global_err
 
     finally:
-        # Fermeture propre si le script a été lancé en autonomie
         if not conn_externe and conn:
-            conn.rollback()  # Pas de commit automatique lors d'un test isolé
+            conn.rollback()
             conn.close()
             print("🔒 Connexion locale fermée (mode autonome : aucun commit appliqué).")
 
