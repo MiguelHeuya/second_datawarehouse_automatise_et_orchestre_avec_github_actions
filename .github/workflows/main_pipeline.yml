@@ -1,0 +1,52 @@
+name: ETL Pipeline Execution
+
+on:
+  workflow_dispatch: # Permet le lancement manuel
+  # schedule:
+  #   - cron: '0 2 * * *' # Optionnel: lancement automatique tous les jours à 2h du matin
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Récupération du code source du dépôt
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      # 2. Configuration de l'environnement Python
+      - name: Configuration de Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip' # Accélère les exécutions futures en mettant en cache les paquets
+
+      # 3. Installation directe de tes dépendances via le file requirements.txt
+      - name: Installer les dépendances Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 4. Lancement de l'orchestrateur ETL avec les secrets injectés
+      - name: Exécuter le pipeline principal
+        env:
+          DW_HOST_local: ${{ secrets.DW_HOST_LOCAL }}
+          DW_PORT_local: ${{ secrets.DW_PORT_LOCAL }}
+          DW_DATABASE_local: ${{ secrets.DW_DATABASE_LOCAL }}
+          DW_USER_local: ${{ secrets.DW_USER_LOCAL }}
+          DW_PASSWORD_local: ${{ secrets.DW_PASSWORD_LOCAL }}
+          DW_SSLMODE: ${{ secrets.DW_SSLMODE }}
+
+          SOURCE_A_HOST_local: ${{ secrets.SOURCE_A_HOST_LOCAL }}
+          SOURCE_A_PORT_local: ${{ secrets.SOURCE_A_PORT_LOCAL }}
+          SOURCE_A_DATABASE_local: ${{ secrets.SOURCE_A_DATABASE_LOCAL }}
+          SOURCE_A_USER_local: ${{ secrets.SOURCE_A_USER_LOCAL }}
+          SOURCE_A_PASSWORD_local: ${{ secrets.SOURCE_A_PASSWORD_LOCAL }}
+
+          SOURCE_B_HOST_local: ${{ secrets.SOURCE_B_HOST_LOCAL }}
+          SOURCE_B_PORT_local: ${{ secrets.SOURCE_B_PORT_LOCAL }}
+          SOURCE_B_DATABASE_local: ${{ secrets.SOURCE_B_DATABASE_LOCAL }}
+          SOURCE_B_USER_local: ${{ secrets.SOURCE_B_USER_LOCAL }}
+          SOURCE_B_PASSWORD_local: ${{ secrets.SOURCE_B_PASSWORD_LOCAL }}
+        run: |
+          python main_pipeline_etl.py
