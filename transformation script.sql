@@ -81,21 +81,49 @@ CREATE TABLE silver.sourcea_source_olist_geolocation_dataset AS (
 );
 
 
-DROP TABLE IF EXISTS silver.sourcea_source_olist_order_items_dataset;
+DROP TABLE IF EXISTS silver.sourcea_source_olist_order_items_dataset CASCADE;
 CREATE TABLE silver.sourcea_source_olist_order_items_dataset AS
-(SELECT
-	order_id,
-	MIN(order_item_id) AS order_item_id,
-	MAX(product_id) AS product_id,
-	MAX(seller_id) AS seller_id,
-	MAX(shipping_limit_date::date) AS shipping_limit_date,
-	SUM(price::double precision) AS price,
-	SUM(freight_value::double precision) AS freight_value
-FROM bronze.sourcea_source_olist_order_items_dataset
-GROUP BY order_id
-);
+(WITH order_product_counts AS (
+	    -- 1. Count distinct products per order
+	    SELECT 
+	        order_id,
+	        COUNT(DISTINCT product_id) AS nb_distinct_products
+	    FROM bronze.sourcea_source_olist_order_items_dataset
+	    GROUP BY order_id
+	)
+	-- CASE 1: Single-product orders -> Aggregate with explicit numeric casting
+	SELECT 
+	    i.order_id,
+	    MIN(i.order_item_id)                            AS order_item_id,
+	    MAX(i.product_id)                              AS product_id,
+	    MAX(i.seller_id)                               AS seller_id,
+	    MAX(i.shipping_limit_date)                     AS shipping_limit_date,
+	    SUM(i.price::numeric)                          AS price,
+	    SUM(i.freight_value::numeric)                  AS freight_value
+	FROM bronze.sourcea_source_olist_order_items_dataset AS i
+	INNER JOIN order_product_counts AS c 
+	    ON i.order_id = c.order_id
+	WHERE c.nb_distinct_products = 1
+	GROUP BY i.order_id
+	UNION ALL
+	-- CASE 2: Multi-product orders -> Retain original rows with matching types
+	SELECT 
+	    i.order_id,
+	    i.order_item_id,
+	    i.product_id,
+	    i.seller_id,
+	    i.shipping_limit_date,
+	    i.price::numeric                               AS price,
+	    i.freight_value::numeric                       AS freight_value
+	FROM bronze.sourcea_source_olist_order_items_dataset AS i
+	INNER JOIN order_product_counts AS c 
+	    ON i.order_id = c.order_id
+	WHERE c.nb_distinct_products > 1);
 
-DROP TABLE IF EXISTS silver.sourcea_source_olist_order_payments_dataset;
+
+
+
+DROP TABLE IF EXISTS silver.sourcea_source_olist_order_payments_dataset CASCADE;
 CREATE TABLE silver.sourcea_source_olist_order_payments_dataset AS(
 SELECT
     order_id,
@@ -111,7 +139,7 @@ GROUP BY order_id
 );
 
 
-DROP TABLE IF EXISTS silver.sourceb_source_olist_order_reviews_dataset;
+DROP TABLE IF EXISTS silver.sourceb_source_olist_order_reviews_dataset CASCADE;
 CREATE TABLE silver.sourceb_source_olist_order_reviews_dataset AS
 	(
 	SELECT
@@ -126,7 +154,7 @@ CREATE TABLE silver.sourceb_source_olist_order_reviews_dataset AS
 );
 
 
-DROP TABLE IF EXISTS silver.sourceb_source_olist_orders_dataset;
+DROP TABLE IF EXISTS silver.sourceb_source_olist_orders_dataset CASCADE;
 CREATE TABLE silver.sourceb_source_olist_orders_dataset AS
 (SELECT
 	order_id,
@@ -141,7 +169,7 @@ FROM bronze.sourceb_source_olist_orders_dataset
 );
 
 
-DROP TABLE IF EXISTS silver.sourceb_source_olist_products_dataset;
+DROP TABLE IF EXISTS silver.sourceb_source_olist_products_dataset CASCADE;
 CREATE TABLE silver.sourceb_source_olist_products_dataset AS
 (
 	SELECT
@@ -204,6 +232,4 @@ CREATE TABLE silver.sourceb_source_product_category_name_translation AS (
         COALESCE(product_category_name_english, 'n/a') AS product_category_name_english
     FROM bronze.sourceb_source_product_category_name_translation
 );
-
-
 
