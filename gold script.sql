@@ -117,3 +117,19 @@ CREATE TABLE gold.dim_products AS
 	FROM silver.sourceb_source_olist_products_dataset AS p
 	LEFT JOIN silver.sourceb_source_product_category_name_translation AS t
 	    ON p.product_category_name = t.product_category_name);
+
+
+
+SELECT
+	order_id,
+	COUNT(*)
+FROM gold.fact_orders
+GROUP BY order_id
+HAVING COUNT(*) > 1 
+
+SELECT
+	*
+FROM gold.fact_orders
+WHERE order_id = 'f0a795dac0e5cf6a6f98cdcab173ffb8'
+
+

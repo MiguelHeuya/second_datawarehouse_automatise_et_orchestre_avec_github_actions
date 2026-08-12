@@ -1,0 +1,41 @@
+# ==========================================
+# 1. ENVIRONNEMENT & SECRETS (fichiers .env)
+# ==========================================
+.env
+.env.*
+!.env.example
+
+# ==========================================
+# 2. CACHE PYTHON & COMPILATION (__pycache__)
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environnements virtuels
+venv/
+.venv/
+env/
+ENV/
+
+# ==========================================
+# 3. FICHIERS DE LOGS & EXÉCUTION
+# ==========================================
+logs/
+*.log
+
+# ==========================================
+# 4. FICHIERS SYSTÈME & EDITEURS DE CODE
+# ==========================================
+# macOS
+.DS_Store
+
+# VS Code / Cursor
+.vscode/
+!.vscode/settings.json
+
+# PyCharm / JetBrains
+.idea/
+
+# Jupyter Notebooks (fichiers temporaires)
+.ipynb_checkpoints/
