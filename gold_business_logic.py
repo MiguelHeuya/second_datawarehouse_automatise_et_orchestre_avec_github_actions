@@ -135,7 +135,7 @@ def build_fact_orders() -> pl.DataFrame:
     if global_avg_score is None:
         global_avg_score = 0.0
 
-    # 2. Jointures sans alias de DataFrame (Polars associe sur les clés 'order_id' et 'customer_id')
+    # 2. Jointures
     df_fact = (
         df_orders
         .join(df_payments, on="order_id", how="inner")
@@ -194,6 +194,53 @@ def build_fact_orders() -> pl.DataFrame:
     ])
 
 
+# ------------------------------------------------------------------------------
+# LOGIQUE D'INDEXATION DE LA COUCHE GOLD
+# ------------------------------------------------------------------------------
+
+# Configuration des index par table (Nom table -> Liste d'instructions DDL)
+GOLD_INDEXES = {
+    "dim_customers": [
+        f'CREATE INDEX IF NOT EXISTS idx_dim_cust_pk ON "{GOLD_SCHEMA}"."dim_customers" (customer_id);',
+        f'CREATE INDEX IF NOT EXISTS idx_dim_cust_state ON "{GOLD_SCHEMA}"."dim_customers" (customer_state);',
+    ],
+    "dim_sellers": [
+        f'CREATE INDEX IF NOT EXISTS idx_dim_sell_pk ON "{GOLD_SCHEMA}"."dim_sellers" (seller_id);',
+        f'CREATE INDEX IF NOT EXISTS idx_dim_sell_state ON "{GOLD_SCHEMA}"."dim_sellers" (seller_state);',
+    ],
+    "dim_products": [
+        f'CREATE INDEX IF NOT EXISTS idx_dim_prod_pk ON "{GOLD_SCHEMA}"."dim_products" (product_id);',
+        f'CREATE INDEX IF NOT EXISTS idx_dim_prod_cat_eng ON "{GOLD_SCHEMA}"."dim_products" (product_category_name_english);',
+    ],
+    "fact_orders": [
+        # Clés de jointure FK / PK
+        f'CREATE INDEX IF NOT EXISTS idx_fact_ord_order_id ON "{GOLD_SCHEMA}"."fact_orders" (order_id);',
+        f'CREATE INDEX IF NOT EXISTS idx_fact_ord_cust_id ON "{GOLD_SCHEMA}"."fact_orders" (customer_id);',
+        f'CREATE INDEX IF NOT EXISTS idx_fact_ord_seller_id ON "{GOLD_SCHEMA}"."fact_orders" (seller_id);',
+        f'CREATE INDEX IF NOT EXISTS idx_fact_ord_prod_id ON "{GOLD_SCHEMA}"."fact_orders" (product_id);',
+        # Axes d'analyses temporelles & statuts
+        f'CREATE INDEX IF NOT EXISTS idx_fact_ord_purchase_date ON "{GOLD_SCHEMA}"."fact_orders" (order_purchase_date);',
+        f'CREATE INDEX IF NOT EXISTS idx_fact_ord_status ON "{GOLD_SCHEMA}"."fact_orders" (order_status);',
+    ]
+}
+
+
+def apply_table_indexes(table_name: str, dw_uri: str = DW_URI):
+    """
+    Applique la liste des index PostgreSQL associés à une table Gold.
+    """
+    indexes = GOLD_INDEXES.get(table_name, [])
+    if not indexes:
+        return
+
+    logger.info(f"  └─ ⚡ Création de {len(indexes)} index sur [{GOLD_SCHEMA}.{table_name}]...")
+    with adbc_dbapi.connect(dw_uri) as conn:
+        with conn.cursor() as cur:
+            for idx_ddl in indexes:
+                cur.execute(idx_ddl)
+        conn.commit()
+
+
 # Registre des tables Gold (Nom Table -> Fonction associée)
 GOLD_TABLES = [
     ("dim_customers", build_dim_customers),
@@ -205,10 +252,10 @@ GOLD_TABLES = [
 
 def run_gold_transformation() -> bool:
     """
-    Exécute le pipeline de modélisation de la couche Gold.
+    Exécute le pipeline de modélisation et d'indexation de la couche Gold.
     """
     logger.info("=" * 80)
-    logger.info("🚀 DÉMARRAGE DU PIPELINE DE MODÉLISATION - COUCHE GOLD")
+    logger.info("🚀 DÉMARRAGE DU PIPELINE DE MODÉLISATION & INDEXATION - COUCHE GOLD")
     logger.info("=" * 80)
 
     try:
@@ -217,7 +264,7 @@ def run_gold_transformation() -> bool:
         
         total_tables = len(GOLD_TABLES)
 
-        # Étape 2 : Boucle de construction et de chargement
+        # Étape 2 : Boucle de construction, chargement et indexation
         for idx, (table_name, build_func) in enumerate(GOLD_TABLES, 1):
             full_target_table = f"{GOLD_SCHEMA}.{table_name}"
             
@@ -238,13 +285,16 @@ def run_gold_transformation() -> bool:
                 engine="adbc"
             )
 
+            # 4. Application des index de performance
+            apply_table_indexes(table_name=table_name, dw_uri=DW_URI)
+
             formatted_rows = f"{nb_rows:,}".replace(",", " ")
             logger.info(
-                f"  └─ ✅ {full_target_table:<50} | {formatted_rows:>8} lignes créées"
+                f"  └─ ✅ {full_target_table:<50} | {formatted_rows:>8} lignes créées & indexées"
             )
 
         logger.info("=" * 80)
-        logger.info("🎉 PIPELINE GOLD TERMINÉ AVEC SUCCÈS")
+        logger.info("🎉 PIPELINE GOLD ET INDEXATION TERMINÉS AVEC SUCCÈS")
         logger.info("=" * 80)
         return True
 
